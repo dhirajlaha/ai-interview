@@ -5,6 +5,7 @@ import cors from "cors";
 import { parseResumeFromFile } from "./lib/resume-parser.ts";
 import { fetchGithubProfile } from "./lib/github-fetcher.ts";
 import { transcribeAudioWithWhisper } from "./lib/stt-whisper.ts";
+import { generateNextInterviewQuestion } from "./lib/interview-llm.ts";
 import { prisma } from "./db.ts";
 
 const PORT = process.env.PORT || 8000;
@@ -203,7 +204,71 @@ app.post(
         data: { status: "IN_PROGRESS", startedAt: new Date() },
       });
 
-      const nextQuestion = `You said: "${transcript}". Can you expand on that with a specific example?`;
+      const sessionWithContext = await prisma.interviewSession.findUnique({
+        where: { id: sessionId },
+        include: {
+          candidate: {
+            include: {
+              resumes: {
+                orderBy: { createdAt: "desc" },
+                take: 1,
+              },
+              githubProfile: {
+                include: {
+                  repositories: {
+                    orderBy: { stars: "desc" },
+                    take: 5,
+                  },
+                },
+              },
+            },
+          },
+          turns: {
+            orderBy: { turnIndex: "asc" },
+            take: 8,
+          },
+        },
+      });
+
+      const parsedProfile =
+        (sessionWithContext?.candidate.resumes[0]?.parsedProfile as {
+          summary?: string;
+        } | null) ?? null;
+
+      const githubProfile = sessionWithContext?.candidate.githubProfile;
+      const topRepo = githubProfile?.repositories[0];
+      const githubSummary = githubProfile
+        ? `Username: ${githubProfile.username}. Followers: ${githubProfile.followers ?? 0}. Top repo: ${topRepo?.repoName ?? "N/A"} (${topRepo?.stars ?? 0} stars).`
+        : null;
+
+      const nextQuestion = await generateNextInterviewQuestion({
+        candidateName: sessionWithContext?.candidate.name || "Candidate",
+        resumeSummary: parsedProfile?.summary ?? null,
+        githubSummary,
+        lastQuestion: question,
+        lastAnswer: transcript,
+        recentTurns: sessionWithContext?.turns.map((t) => ({
+          question: t.question,
+          answer: t.answer,
+        })) ?? [{ question, answer: transcript }],
+      });
+
+      if (process.env.DEBUG_GEMINI === "true") {
+        console.info("[interview] llm context summary", {
+          sessionId,
+          candidateId: sessionWithContext?.candidate.id,
+          hasResumeSummary: Boolean(parsedProfile?.summary),
+          hasGithubProfile: Boolean(githubProfile),
+          previousTurns: sessionWithContext?.turns.length ?? 0,
+        });
+      }
+
+      if (process.env.DEBUG_GEMINI === "true") {
+        console.info("[interview] next question source", {
+          source: "gemini",
+          nextQuestion,
+        });
+      }
 
       return res.json({
         turnId: turn.id,
@@ -212,8 +277,8 @@ app.post(
       });
     } catch (error) {
       console.error(error);
-      return res.status(500).json({
-        error: "Failed to process audio turn.",
+      return res.status(502).json({
+        error: "LLM generation failed for this turn.",
       });
     } finally {
       if (process.env.KEEP_AUDIO_FILES !== "true") {
