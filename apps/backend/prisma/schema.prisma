@@ -1,0 +1,130 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Candidate {
+  id            String   @id @default(cuid())
+
+  name          String?
+  email         String?
+  phone         String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  resumes       Resume[]
+  githubProfile GithubProfile?
+  interviews    InterviewSession[]
+}
+
+model Resume {
+  id              String   @id @default(cuid())
+
+  candidateId     String
+  originalFileUrl String?
+  rawText         String   @db.Text
+  parsedProfile   Json
+
+  createdAt       DateTime @default(now())
+
+  candidate       Candidate @relation(fields: [candidateId],references: [id])
+}
+
+model GithubProfile {
+  id            String   @id @default(cuid())
+
+  candidateId   String   @unique
+  username      String
+  profileUrl    String
+  followers     Int?
+  following     Int?
+  summary       Json?
+
+  createdAt     DateTime @default(now())
+
+  candidate     Candidate @relation( fields: [candidateId], references: [id])
+  repositories  GithubRepository[]
+}
+
+model GithubRepository {
+  id              String @id @default(cuid())
+
+  githubProfileId String
+  repoName        String
+  description     String?
+  language        String?
+  stars           Int @default(0)
+  forks           Int @default(0)
+  repoUrl         String
+  topics          Json?
+
+  createdAt       DateTime @default(now())
+
+  githubProfile GithubProfile @relation( fields: [githubProfileId], references: [id])
+}
+
+model InterviewSession {
+  id              String @id @default(cuid())
+
+  candidateId     String
+  status          InterviewStatus
+  interviewPlan   Json?
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  createdAt       DateTime @default(now())
+
+  candidate       Candidate @relation( fields: [candidateId], references: [id])
+  turns           InterviewTurn[]
+  report          InterviewReport?
+}
+
+model InterviewTurn {
+  id            String @id @default(cuid())
+
+  sessionId     String
+  turnIndex     Int
+  question      String
+  answer        String?
+  audioPath     String?
+  sttMetadata   Json?
+
+  createdAt     DateTime @default(now())
+
+  session       InterviewSession @relation( fields: [sessionId], references: [id])
+}
+
+model InterviewReport {
+  id              String @id @default(cuid())
+
+  sessionId       String @unique
+  overallScore    Float
+  technicalScore  Float?
+  communicationScore Float?
+  strengths       Json
+  weaknesses      Json
+  summary         String @db.Text
+  recommendation  String?
+  rawEvaluation   Json?
+
+  createdAt       DateTime @default(now())
+
+  session         InterviewSession @relation( fields: [sessionId], references: [id])
+}
+
+enum InterviewStatus {
+  CREATED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
